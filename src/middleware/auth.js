@@ -2,8 +2,8 @@ import { AuthError } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 
 export function authMiddleware(req, res, next) {
-  // Health endpoint is public
-  if (req.path === "/health") return next();
+  // Public endpoints: health check, SSE stream (EventSource can't send headers)
+  if (req.path === "/health" || (req.path === "/sse" && req.method === "GET")) return next();
 
   const apiKey = req.headers["x-api-key"] || req.query.api_key;
   const expected = process.env.API_KEY;
