@@ -4,7 +4,7 @@ Production-ready [Model Context Protocol](https://modelcontextprotocol.io) serve
 
 ## Features
 
-- HTTP/SSE transport for real-time bidirectional communication
+- Streamable HTTP transport (single endpoint, no SSE setup needed)
 - Tool discovery (`tools/list`) and execution (`tools/call`)
 - API-key authentication middleware
 - Rate limiting via `express-rate-limit`
@@ -31,7 +31,7 @@ Production-ready [Model Context Protocol](https://modelcontextprotocol.io) serve
     │   ├── searchData.js     # search_data tool
     │   └── registry.js       # Tool registry (list + execute)
     ├── routes/
-    │   ├── mcp.js            # /sse and /messages endpoints
+    │   ├── mcp.js            # /mcp endpoint (Streamable HTTP transport)
     │   └── health.js         # /health endpoint
     ├── middleware/
     │   ├── auth.js           # API key check
@@ -118,10 +118,7 @@ Response:
   "mcpServers": {
     "my-connector": {
       "type": "sse",
-      "url": "https://your-app.up.railway.app/sse",
-      "headers": {
-        "x-api-key": "sk-your-secret-api-key-here"
-      }
+      "url": "https://your-app.up.railway.app/mcp"
     }
   }
 }
@@ -130,16 +127,24 @@ Response:
 4. Restart Claude Desktop
 5. Your tools (`hello_world`, `get_time`, `search_data`) will appear in the interface
 
+### Custom Connectors UI
+
+If using the in-app **Custom Connectors** UI (Settings → Connectors → Add custom connector):
+
+- **Name:** `My MCP Server`
+- **Remote MCP server URL:** `https://your-app.up.railway.app/mcp`
+- **Advanced → Headers:** empty (no auth configured by default)
+
 ### Programmatic (MCP Client)
 
 If you are building a custom MCP client:
 
 ```javascript
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const transport = new SSEClientTransport(
-  new URL("https://your-app.up.railway.app/sse")
+const transport = new StreamableHTTPClientTransport(
+  new URL("https://your-app.up.railway.app/mcp")
 );
 
 const client = new Client(
@@ -161,79 +166,64 @@ const result = await client.callTool({
 console.log(result);
 ```
 
-## Example curl Requests
+## Example MCP Requests
 
-The MCP transport uses **SSE** for server-to-client messages and **HTTP POST** for client-to-server messages. The flow is:
+The server uses the **Streamable HTTP** transport — just POST JSON-RPC messages to the `/mcp` endpoint.
 
-1. Open an SSE connection to get a session ID
-2. POST JSON-RPC messages using that session ID
-
-### Step 1 — Open SSE Connection (in one terminal)
+### List Tools
 
 ```bash
-curl -N -H "x-api-key: sk-your-secret-api-key-here" \
-  http://localhost:3000/sse
-```
-
-You will see an `event: endpoint` message containing a session ID.
-
-### Step 2 — List Tools (in another terminal)
-
-```bash
-curl -X POST \
+curl -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \
-  -H "x-api-key: sk-your-secret-api-key-here" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
     "method": "tools/list",
     "params": {}
-  }' \
-  "http://localhost:3000/messages?sessionId=SESSION_ID_FROM_SSE"
+  }'
 ```
 
-### Step 3 — Call a Tool
+### Call hello_world
 
 ```bash
-# hello_world
-curl -X POST \
+curl -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \
-  -H "x-api-key: sk-your-secret-api-key-here" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 2,
     "method": "tools/call",
     "params": { "name": "hello_world", "arguments": { "name": "Alice" } }
-  }' \
-  "http://localhost:3000/messages?sessionId=SESSION_ID_FROM_SSE"
+  }'
 ```
 
+### Call get_time
+
 ```bash
-# get_time
-curl -X POST \
+curl -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \
-  -H "x-api-key: sk-your-secret-api-key-here" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 3,
     "method": "tools/call",
     "params": { "name": "get_time", "arguments": {} }
-  }' \
-  "http://localhost:3000/messages?sessionId=SESSION_ID_FROM_SSE"
+  }'
 ```
 
+### Call search_data
+
 ```bash
-# search_data
-curl -X POST \
+curl -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \
-  -H "x-api-key: sk-your-secret-api-key-here" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 4,
     "method": "tools/call",
     "params": { "name": "search_data", "arguments": { "query": "mcp" } }
-  }' \
-  "http://localhost:3000/messages?sessionId=SESSION_ID_FROM_SSE"
+  }'
 ```
 
 ## Deploy to Railway
@@ -262,9 +252,10 @@ railway domain
 |---------------------------|--------------------------------|
 | `PORT`                    | Internal port (Railway sets it)|
 | `NODE_ENV`                | `production`                   |
-| `API_KEY`                 | Your secret API key            |
 | `RATE_LIMIT_WINDOW_MS`    | Rate limit window (ms)         |
 | `RATE_LIMIT_MAX_REQUESTS` | Max requests per window        |
+
+> **Note:** Auth is disabled by default. To enable, set `API_KEY` and update `src/middleware/auth.js`.
 
 ## Adding a New Tool
 

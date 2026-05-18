@@ -15,7 +15,6 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 app.use(cors({ origin: "*" }));
 app.use(rateLimiter);
 app.use(authMiddleware);
-app.use(express.json({ limit: "1mb" }));
 
 // ── Routes ────────────────────────────────────────────
 app.use(healthRouter);
@@ -28,5 +27,5 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   logger.info(`MCP server listening on port ${PORT}`);
   logger.info(`Health: http://localhost:${PORT}/health`);
-  logger.info(`SSE:    http://localhost:${PORT}/sse`);
+  logger.info(`MCP:    http://localhost:${PORT}/mcp`);
 });

@@ -1,76 +1,66 @@
 import { Router } from "express";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { z } from "zod";
 import { listToolDefinitions, executeTool } from "../tools/registry.js";
 import { logger } from "../utils/logger.js";
 
 const router = Router();
 
 // ── MCP Server instance ───────────────────────────────
-const mcpServer = new Server(
+const mcpServer = new McpServer(
   { name: "mcp-custom-connector", version: "1.0.0" },
   { capabilities: { tools: {} } }
 );
 
-// ── Tool listing handler ──────────────────────────────
-mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-  logger.info("Client requested tool list");
-  return { tools: listToolDefinitions() };
-});
+// ── Register tools from the registry ──────────────────
+function toZodSchema(inputSchema) {
+  const props = inputSchema?.properties;
+  if (!props || Object.keys(props).length === 0) return {};
 
-// ── Tool execution handler ────────────────────────────
-mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  logger.info(`Tool called: ${name}`, args);
-  return executeTool(name, args ?? {});
-});
+  const schema = {};
+  const required = new Set(inputSchema.required || []);
 
-// ── Session tracking ──────────────────────────────────
-const sessions = new Map();
-
-// ── SSE endpoint — clients connect here first ─────────
-router.get("/sse", async (req, res) => {
-  try {
-    const transport = new SSEServerTransport("/messages", res);
-    sessions.set(transport.sessionId, transport);
-    logger.info(`SSE session opened: ${transport.sessionId}`);
-
-    res.on("close", () => {
-      sessions.delete(transport.sessionId);
-      logger.info(`SSE session closed: ${transport.sessionId}`);
-    });
-
-    await mcpServer.connect(transport);
-  } catch (err) {
-    logger.error("SSE connection error", err.message);
-    if (!res.headersSent) res.status(500).end();
+  for (const [key, prop] of Object.entries(props)) {
+    let field;
+    switch (prop.type) {
+      case "string": field = z.string(); break;
+      case "number": field = z.number(); break;
+      case "boolean": field = z.boolean(); break;
+      default: field = z.any(); break;
+    }
+    if (!required.has(key)) field = field.optional();
+    schema[key] = field;
   }
-});
+  return schema;
+}
 
-// ── Message endpoint — clients POST JSON-RPC here ─────
-router.post("/messages", async (req, res) => {
-  const sessionId = req.query.sessionId;
-  if (!sessionId || !sessions.has(sessionId)) {
-    return res.status(404).json({
-      jsonrpc: "2.0",
-      error: { code: 404, message: "Session not found" },
-      id: null,
-    });
-  }
+const toolDefs = listToolDefinitions();
+for (const def of toolDefs) {
+  const schema = toZodSchema(def.inputSchema);
+  mcpServer.tool(
+    def.name,
+    def.description || "",
+    schema,
+    async (args) => executeTool(def.name, args)
+  );
+  logger.info(`Tool registered: ${def.name}`);
+}
 
+// ── Single transport instance ─────────────────────────
+const transport = new StreamableHTTPServerTransport();
+await mcpServer.connect(transport);
+
+// ── Single endpoint — clients POST JSON-RPC here ──────
+router.all("/mcp", async (req, res) => {
   try {
-    const transport = sessions.get(sessionId);
-    await transport.handlePostMessage(req, res);
+    await transport.handleRequest(req, res);
   } catch (err) {
-    logger.error("Message handling error", err.message);
+    logger.error("MCP request error", err.message);
     if (!res.headersSent) {
       res.status(500).json({
         jsonrpc: "2.0",
-        error: { code: 500, message: "Internal server error" },
+        error: { code: -32603, message: "Internal error" },
         id: null,
       });
     }
