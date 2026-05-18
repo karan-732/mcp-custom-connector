@@ -5,7 +5,7 @@ export function authMiddleware(req, res, next) {
   // Health endpoint is public
   if (req.path === "/health") return next();
 
-  const apiKey = req.headers["x-api-key"];
+  const apiKey = req.headers["x-api-key"] || req.query.api_key;
   const expected = process.env.API_KEY;
 
   if (!expected) {
